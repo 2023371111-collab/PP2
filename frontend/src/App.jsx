@@ -7,6 +7,14 @@ import Users from './pages/Users.jsx';
 export default function App() {
   const [user, setUser] = useState(session.token ? session.user : null);
   const [page, setPage] = useState('products');
+  const [version, setVersion] = useState('');
+
+  useEffect(() => {
+    fetch('/api/health')
+      .then((r) => r.json())
+      .then((d) => setVersion(d.version || ''))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     const onExpired = () => setUser(null);
@@ -24,7 +32,14 @@ export default function App() {
   return (
     <div className="layout">
       <header className="topbar">
-        <div className="brand">📦 Sistema de Inventario</div>
+        <div className="brand">
+          📦 Sistema de Inventario
+          {version && (
+            <span className="version" data-testid="app-version">
+              v{version.slice(0, 7)}
+            </span>
+          )}
+        </div>
         <nav>
           <button
             data-testid="nav-products"
