@@ -25,7 +25,7 @@ export default function Login({ onLogin }) {
   return (
     <div className="login-page">
       <form className="card login-card" onSubmit={submit} data-testid="login-form">
-        <h1>Iniciar sesión</h1>
+        <h1>Inicio de sesion</h1>
         <p className="muted">Sistema de gestión de usuarios y productos</p>
         <label>
           Correo electrónico
