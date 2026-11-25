@@ -81,7 +81,7 @@ def panel(title, ptype, sql, stream, x, y, layout, stream_type="logs", unit=None
     _panel_seq[0] += 1
     pid = f"Panel_ID{_panel_seq[0]}"
     colors = ["#2457d6", "#e5484d", "#30a46c", "#f5a524", "#8e4ec6", "#0091ff"]
-    config = {"show_legends": True, "decimals": decimals}
+    config = {"show_legends": True, "decimals": 0 if ptype == "table" else decimals}
     if unit:
         config["unit"] = unit
     return {
@@ -218,10 +218,10 @@ def build_dashboards():
                   f"SELECT request_timestamp AS timestamp, method AS metodo, route AS endpoint, status_code, duration_ms AS latencia_ms, trace_id "
                   f"{HTTP} ORDER BY _timestamp DESC LIMIT 100",
                   "app_logs", ["timestamp", "metodo", "endpoint", "status_code", "latencia_ms", "trace_id"], [], [0, 31, 48, 10]),
-            panel("Excepciones y errores del sistema", "table",
-                  "SELECT _timestamp AS fecha, level AS nivel, body AS mensaje, error_message AS error, path FROM app_logs "
-                  "WHERE level = 'error' ORDER BY _timestamp DESC LIMIT 50",
-                  "app_logs", ["fecha", "nivel", "mensaje", "error", "path"], [], [0, 41, 48, 8]),
+            panel("Errores y advertencias de la aplicación (4xx / 5xx / excepciones)", "table",
+                  "SELECT _timestamp AS fecha, level AS nivel, body AS mensaje, path FROM app_logs "
+                  "WHERE level IN ('error', 'warn') ORDER BY _timestamp DESC LIMIT 50",
+                  "app_logs", ["fecha", "nivel", "mensaje", "path"], [], [0, 41, 48, 8]),
         ],
     )
 
