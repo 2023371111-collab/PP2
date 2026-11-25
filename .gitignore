@@ -1,0 +1,10 @@
+node_modules/
+dist/
+.env
+coverage/
+e2e/test-results/
+e2e/playwright-report/
+*.log
+e2e/capturas/
+__pycache__/
+.pytest_cache/

@@ -1,0 +1,175 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  O2_URL: ${{ secrets.O2_URL }}
+  O2_USER: ${{ secrets.O2_USER }}
+  O2_PASSWORD: ${{ secrets.O2_PASSWORD }}
+  COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+
+jobs:
+  # ---------------------------------------------------------------
+  # 1) Pruebas unitarias / integración del backend (Jest + Supertest)
+  # ---------------------------------------------------------------
+  backend-tests:
+    name: Backend (Jest)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U app" --health-interval 5s --health-timeout 3s --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - run: npm ci
+      - name: Ejecutar pruebas Jest
+        run: npm test -- --ci
+        env:
+          NODE_ENV: test
+          DATABASE_URL: postgres://app:app@localhost:5432/app
+
+  # ---------------------------------------------------------------
+  # 2) Pruebas E2E Frontend + Backend (Playwright) y API (Pytest)
+  #    sobre la aplicación completa levantada con Docker Compose
+  # ---------------------------------------------------------------
+  e2e-tests:
+    name: E2E (Playwright + Pytest)
+    runs-on: ubuntu-latest
+    env:
+      APP_PORT: "8080"
+      BASE_URL: http://localhost:8080
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Levantar aplicación (db, backend, frontend)
+        run: docker compose up -d --build db backend frontend
+
+      - name: Esperar health check
+        run: |
+          for i in $(seq 1 60); do
+            curl -fsS $BASE_URL/api/health && exit 0
+            sleep 3
+          done
+          docker compose logs
+          exit 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: e2e/package-lock.json
+
+      - name: Instalar Playwright
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Ejecutar pruebas Playwright
+        working-directory: e2e
+        run: npx playwright test
+
+      - uses: actions/setup-python@v5
+        if: ${{ !cancelled() }}
+        with:
+          python-version: "3.12"
+
+      - name: Ejecutar pruebas Pytest (API)
+        if: ${{ !cancelled() }}
+        run: |
+          pip install pytest
+          pytest tests-pytest -v
+
+      - name: Logs de contenedores (si falla)
+        if: failure()
+        run: docker compose logs --tail 100
+
+      - name: Publicar reporte de Playwright
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report
+          retention-days: 14
+
+  # ---------------------------------------------------------------
+  # 3) Registro del resultado de las pruebas en OpenObserve (siempre)
+  # ---------------------------------------------------------------
+  report-tests:
+    name: Registrar pruebas en OpenObserve
+    runs-on: ubuntu-latest
+    needs: [backend-tests, e2e-tests]
+    if: ${{ always() }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enviar resultado de pruebas
+        env:
+          BACKEND_RESULT: ${{ needs.backend-tests.result }}
+          E2E_RESULT: ${{ needs.e2e-tests.result }}
+        run: |
+          if [ "$BACKEND_RESULT" = "success" ] && [ "$E2E_RESULT" = "success" ]; then
+            bash scripts/notify-openobserve.sh test_run success "Todas las pruebas aprobadas"
+          else
+            bash scripts/notify-openobserve.sh test_run failure "Pruebas fallidas: backend=$BACKEND_RESULT e2e=$E2E_RESULT"
+            bash scripts/notify-openobserve.sh deploy blocked "Despliegue a EC2 bloqueado: no se ejecuta la conexión SSH"
+          fi
+
+  # ---------------------------------------------------------------
+  # 4) Despliegue condicionado: SOLO si todas las pruebas pasan
+  #    (needs => si algún job de pruebas falla, este job se omite y
+  #    nunca se abre la conexión SSH hacia EC2)
+  # ---------------------------------------------------------------
+  deploy:
+    name: Desplegar en AWS EC2
+    runs-on: ubuntu-latest
+    needs: [backend-tests, e2e-tests]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Desplegar por SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          command_timeout: 20m
+          script: |
+            cd ~/app
+            git fetch --prune origin main && git reset --hard origin/main
+            APP_VERSION=${{ github.sha }} bash scripts/deploy.sh
+
+      - name: Registrar despliegue exitoso en OpenObserve
+        if: ${{ success() }}
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: bash scripts/notify-openobserve.sh deploy success "Contenedores actualizados en EC2"
+
+      - name: Registrar despliegue fallido en OpenObserve
+        if: ${{ failure() }}
+        env:
+          EC2_HOST: ${{ secrets.EC2_HOST }}
+        run: bash scripts/notify-openobserve.sh deploy failure "Error durante el despliegue en EC2"

@@ -1,0 +1,109 @@
+# Servicios de la aplicación: db, backend, frontend (siempre).
+# Servicios de observabilidad (perfil "observability"): openobserve, otel-collector, host-agent.
+#   Local / CI (solo app):          docker compose up -d --build
+#   Servidor EC2 (todo):            COMPOSE_PROFILES=observability en .env
+name: inventario
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-app}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-app}
+      POSTGRES_DB: ${POSTGRES_DB:-app}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-app}:${POSTGRES_PASSWORD:-app}@db:5432/${POSTGRES_DB:-app}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@demo.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-Admin123!}
+      APP_VERSION: ${APP_VERSION:-dev}
+      OTEL_ENABLED: ${OTEL_ENABLED:-false}
+      OTEL_SERVICE_NAME: backend-api
+      O2_OTLP_ENDPOINT: http://openobserve:5080/api/default
+      O2_USER: ${O2_USER:-admin@demo.com}
+      O2_PASSWORD: ${O2_PASSWORD:-Complexpass#123}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "${APP_PORT:-80}:80"
+
+  # ---------------- Observabilidad ----------------
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:latest
+    profiles: ["observability"]
+    restart: unless-stopped
+    environment:
+      ZO_ROOT_USER_EMAIL: ${O2_USER:-admin@demo.com}
+      ZO_ROOT_USER_PASSWORD: ${O2_PASSWORD:-Complexpass#123}
+      ZO_DATA_DIR: /data
+      ZO_TELEMETRY: "false"
+      # Permite que el destino de alertas sea el propio OpenObserve (stream "alertas_disparadas")
+      ZO_SSRF_ALLOW_LOOPBACK: "true"
+    ports:
+      - "5080:5080"
+    volumes:
+      - o2data:/data
+
+  # OpenTelemetry Collector: métricas del host (CPU, RAM, red, disco, carga) vía OTLP
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.115.1
+    profiles: ["observability"]
+    restart: unless-stopped
+    network_mode: host
+    pid: host
+    command: ["--config=/etc/otelcol/config.yaml"]
+    environment:
+      O2_USER: ${O2_USER:-admin@demo.com}
+      O2_PASSWORD: ${O2_PASSWORD:-Complexpass#123}
+      HOST_NAME: ${HOST_NAME:-ec2-server}
+    volumes:
+      - ./observability/otel-collector.yaml:/etc/otelcol/config.yaml:ro
+      - /:/hostfs:ro
+    depends_on:
+      - openobserve
+
+  # Agente ligero: CPU, RAM, ancho de banda y temperatura -> stream "host_metrics" (HTTP/JSON)
+  host-agent:
+    build: ./observability/agent
+    profiles: ["observability"]
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      O2_URL: http://localhost:5080
+      O2_USER: ${O2_USER:-admin@demo.com}
+      O2_PASSWORD: ${O2_PASSWORD:-Complexpass#123}
+      HOST_NAME: ${HOST_NAME:-ec2-server}
+      INTERVAL_SECONDS: "15"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+    depends_on:
+      - openobserve
+
+volumes:
+  pgdata:
+  o2data:

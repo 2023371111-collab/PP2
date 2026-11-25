@@ -1,0 +1,54 @@
+# OpenTelemetry Collector - métricas de infraestructura del servidor EC2 -> OpenObserve (OTLP/HTTP)
+extensions:
+  basicauth/o2:
+    client_auth:
+      username: ${env:O2_USER}
+      password: ${env:O2_PASSWORD}
+
+receivers:
+  hostmetrics:
+    root_path: /hostfs
+    collection_interval: 15s
+    scrapers:
+      cpu:
+        metrics:
+          system.cpu.utilization:
+            enabled: true
+      memory:
+        metrics:
+          system.memory.utilization:
+            enabled: true
+      network: {}
+      load: {}
+      disk: {}
+      filesystem:
+        metrics:
+          system.filesystem.utilization:
+            enabled: true
+      paging: {}
+
+processors:
+  batch:
+    timeout: 10s
+  resource:
+    attributes:
+      - key: host.name
+        value: ${env:HOST_NAME}
+        action: upsert
+      - key: service.name
+        value: ec2-host
+        action: upsert
+
+exporters:
+  otlphttp/o2:
+    endpoint: http://localhost:5080/api/default
+    auth:
+      authenticator: basicauth/o2
+
+service:
+  extensions: [basicauth/o2]
+  pipelines:
+    metrics:
+      receivers: [hostmetrics]
+      processors: [resource, batch]
+      exporters: [otlphttp/o2]
