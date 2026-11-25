@@ -31,6 +31,15 @@ con **OpenTelemetry** hacia **OpenObserve** (logs, métricas, trazas, infraestru
 | RF-05 Infraestructura | `observability/otel-collector.yaml` + `observability/agent/agent.py` |
 | RF-06 Dashboards y alertas | `scripts/setup_openobserve.py` (4 dashboards + 6 alertas, se ejecuta en cada deploy) |
 
+## Enlaces
+
+| Recurso | URL |
+|---|---|
+| Repositorio | https://github.com/2023371111-collab/PP2 |
+| Aplicación desplegada (AWS EC2) | http://32.201.52.232 |
+| Health check de la API | http://32.201.52.232/api/health |
+| OpenObserve | http://32.201.52.232:5080 |
+
 ## Credenciales por defecto
 
 | Sistema | Usuario | Contraseña |
